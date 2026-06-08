@@ -15,6 +15,7 @@ import {
   Statistic,
   List,
   Avatar,
+  Alert,
 } from 'antd'
 import {
   PlayCircleOutlined,
@@ -24,13 +25,17 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   ToolOutlined,
+  DisconnectOutlined,
+  SyncOutlined,
 } from '@ant-design/icons'
 import type { UploadProps } from 'antd'
-import { inspectionApi, productApi, productionLineApi } from '../services/api'
-import type { DetectionResult, Product, ProductionLine, InspectionRecord } from '../types'
+import { inspectionApi, productApi, productionLineApi, systemConfigApi } from '../services/api'
+import type { DetectionResult, Product, ProductionLine, InspectionRecord, SystemConfig } from '../types'
 import dayjs from 'dayjs'
 
 const { Option } = Select
+
+const RECONNECT_INTERVAL = 3000
 
 const RealTimeDetection: React.FC = () => {
   const [isRunning, setIsRunning] = useState(false)
@@ -41,37 +46,29 @@ const RealTimeDetection: React.FC = () => {
   const [selectedLine, setSelectedLine] = useState<string>('')
   const [recentResults, setRecentResults] = useState<InspectionRecord[]>([])
   const [stats, setStats] = useState({ total: 0, pass: 0, rework: 0, fail: 0 })
+  const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimerRef = useRef<number | null>(null)
   const timerRef = useRef<number | null>(null)
+  const consecutiveDefectsRef = useRef<Record<string, number>>({})
+  const [batchWarningConfig, setBatchWarningConfig] = useState({
+    enabled: true,
+    threshold: 5,
+    method: 'popup',
+  })
 
-  useEffect(() => {
-    const loadInitData = async () => {
-      try {
-        const [productList, lineList, records] = await Promise.all([
-          productApi.getList({ is_active: true }),
-          productionLineApi.getList(),
-          inspectionApi.getList({ limit: 20 }),
-        ])
-        setProducts(productList)
-        setLines(lineList)
-        setRecentResults(records)
-        if (productList.length > 0) {
-          setSelectedProduct(productList[0].product_code)
-        }
-        if (lineList.length > 0) {
-          setSelectedLine(lineList[0].line_code)
-        }
-      } catch (e) {
-        console.error(e)
-      }
-    }
-    loadInitData()
-  }, [])
-
-  useEffect(() => {
+  const connectWebSocket = () => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws/realtime`
     wsRef.current = new WebSocket(wsUrl)
+
+    wsRef.current.onopen = () => {
+      setWsConnected(true)
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+    }
 
     wsRef.current.onmessage = (event) => {
       try {
@@ -85,6 +82,19 @@ const RealTimeDetection: React.FC = () => {
             rework: prev.rework + (result.result === 'rework' ? 1 : 0),
             fail: prev.fail + (result.result === 'fail' ? 1 : 0),
           }))
+
+          if (result.defects.length > 0) {
+            const defectTypeCode = result.defects[0].defect_type_code
+            consecutiveDefectsRef.current[defectTypeCode] = (consecutiveDefectsRef.current[defectTypeCode] || 0) + 1
+            
+            if (batchWarningConfig.enabled && 
+                consecutiveDefectsRef.current[defectTypeCode] >= batchWarningConfig.threshold) {
+              triggerBatchWarning(result.defects[0].defect_type_name, consecutiveDefectsRef.current[defectTypeCode])
+              consecutiveDefectsRef.current[defectTypeCode] = 0
+            }
+          } else {
+            consecutiveDefectsRef.current = {}
+          }
 
           const record: InspectionRecord = {
             id: Date.now(),
@@ -112,7 +122,88 @@ const RealTimeDetection: React.FC = () => {
       }
     }
 
+    wsRef.current.onclose = () => {
+      setWsConnected(false)
+      scheduleReconnect()
+    }
+
+    wsRef.current.onerror = () => {
+      setWsConnected(false)
+    }
+  }
+
+  const scheduleReconnect = () => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+    }
+    reconnectTimerRef.current = window.setTimeout(() => {
+      connectWebSocket()
+    }, RECONNECT_INTERVAL)
+  }
+
+  const triggerBatchWarning = (defectTypeName: string, count: number) => {
+    if (batchWarningConfig.method === 'popup' || batchWarningConfig.method === 'both') {
+      message.warning({
+        content: `批量异常预警：连续 ${count} 件检测到 ${defectTypeName} 缺陷！`,
+        duration: 5,
+        style: { marginTop: '40px' },
+      })
+    }
+    if (batchWarningConfig.method === 'sound' || batchWarningConfig.method === 'both') {
+      const audio = new Audio('/api/alert-sound')
+      audio.play().catch(() => {})
+    }
+  }
+
+  const loadBatchWarningConfig = async () => {
+    try {
+      const configs = await systemConfigApi.getList()
+      const configMap: Record<string, SystemConfig> = {}
+      configs.forEach((c) => {
+        configMap[c.config_key] = c
+      })
+      setBatchWarningConfig({
+        enabled: configMap['batch_warning_enabled']?.config_value !== 'false',
+        threshold: parseInt(configMap['batch_warning_threshold']?.config_value || '5', 10),
+        method: configMap['batch_warning_method']?.config_value || 'popup',
+      })
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  useEffect(() => {
+    const loadInitData = async () => {
+      try {
+        const [productList, lineList, records] = await Promise.all([
+          productApi.getList({ is_active: true }),
+          productionLineApi.getList(),
+          inspectionApi.getList({ limit: 20 }),
+        ])
+        setProducts(productList)
+        setLines(lineList)
+        setRecentResults(records)
+        if (productList.length > 0) {
+          setSelectedProduct(productList[0].product_code)
+        }
+        if (lineList.length > 0) {
+          setSelectedLine(lineList[0].line_code)
+        }
+      } catch (e) {
+        console.error(e)
+      }
+    }
+    loadInitData()
+    loadBatchWarningConfig()
+  }, [])
+
+  useEffect(() => {
+    connectWebSocket()
+
     return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+      }
       wsRef.current?.close()
     }
   }, [])
@@ -229,6 +320,22 @@ const RealTimeDetection: React.FC = () => {
 
   return (
     <div>
+      {!wsConnected && (
+        <Alert
+          message={
+            <Space>
+              <SyncOutlined spin />
+              连接中断，正在重连...
+            </Space>
+          }
+          type="warning"
+          showIcon
+          icon={<DisconnectOutlined />}
+          style={{ marginBottom: 16 }}
+          banner
+        />
+      )}
+
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card size="small">
@@ -274,7 +381,15 @@ const RealTimeDetection: React.FC = () => {
       <Row gutter={16}>
         <Col span={16}>
           <Card
-            title="实时检测画面"
+            title={
+              <Space>
+                实时检测画面
+                <Badge
+                  status={wsConnected ? 'success' : 'error'}
+                  text={wsConnected ? '已连接' : '连接中断'}
+                />
+              </Space>
+            }
             extra={
               <Space>
                 <Select

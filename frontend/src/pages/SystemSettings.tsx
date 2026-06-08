@@ -14,8 +14,12 @@ import {
   Col,
   Statistic,
   List,
+  Switch,
+  InputNumber,
+  Radio,
+  Divider,
 } from 'antd'
-import { EditOutlined, ReloadOutlined } from '@ant-design/icons'
+import { EditOutlined, ReloadOutlined, WarningOutlined, BellOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { systemConfigApi, productionLineApi } from '../services/api'
 import type { SystemConfig, ProductionLine } from '../types'
@@ -31,6 +35,11 @@ const SystemSettings: React.FC = () => {
   const [editingConfig, setEditingConfig] = useState<SystemConfig | null>(null)
   const [form] = Form.useForm()
 
+  const [batchWarningEnabled, setBatchWarningEnabled] = useState(true)
+  const [batchWarningThreshold, setBatchWarningThreshold] = useState(5)
+  const [batchWarningMethod, setBatchWarningMethod] = useState('popup')
+  const [savingWarning, setSavingWarning] = useState(false)
+
   const loadData = async () => {
     setLoading(true)
     try {
@@ -40,6 +49,14 @@ const SystemSettings: React.FC = () => {
       ])
       setConfigs(cfgList)
       setLines(lineList)
+
+      const configMap: Record<string, SystemConfig> = {}
+      cfgList.forEach((c) => {
+        configMap[c.config_key] = c
+      })
+      setBatchWarningEnabled(configMap['batch_warning_enabled']?.config_value !== 'false')
+      setBatchWarningThreshold(parseInt(configMap['batch_warning_threshold']?.config_value || '5', 10))
+      setBatchWarningMethod(configMap['batch_warning_method']?.config_value || 'popup')
     } catch (e) {
       console.error(e)
       message.error('加载失败')
@@ -76,6 +93,36 @@ const SystemSettings: React.FC = () => {
     } catch (e: any) {
       if (e.errorFields) return
       message.error('操作失败')
+    }
+  }
+
+  const handleSaveBatchWarning = async () => {
+    setSavingWarning(true)
+    try {
+      await Promise.all([
+        systemConfigApi.update(
+          'batch_warning_enabled',
+          batchWarningEnabled ? 'true' : 'false',
+          '是否启用批量异常预警'
+        ),
+        systemConfigApi.update(
+          'batch_warning_threshold',
+          String(batchWarningThreshold),
+          '批量预警阈值（连续N件同类缺陷触发）'
+        ),
+        systemConfigApi.update(
+          'batch_warning_method',
+          batchWarningMethod,
+          '预警方式：popup-页面弹窗，sound-声音提醒，both-两者都有'
+        ),
+      ])
+      message.success('保存成功，配置已立即生效')
+      loadData()
+    } catch (e) {
+      console.error(e)
+      message.error('保存失败')
+    } finally {
+      setSavingWarning(false)
     }
   }
 
@@ -145,6 +192,15 @@ const SystemSettings: React.FC = () => {
     return map[status] || status
   }
 
+  const getWarningMethodText = (method: string) => {
+    const map: Record<string, string> = {
+      popup: '页面弹窗',
+      sound: '声音提醒',
+      both: '弹窗+声音',
+    }
+    return map[method] || method
+  }
+
   return (
     <div>
       <Card
@@ -154,7 +210,124 @@ const SystemSettings: React.FC = () => {
           </Button>
         }
       >
-        <Tabs defaultActiveKey="config">
+        <Tabs defaultActiveKey="warning">
+          <TabPane tab="预警设置" key="warning">
+            <Row gutter={16}>
+              <Col span={12}>
+                <Card
+                  title={
+                    <Space>
+                      <WarningOutlined style={{ color: '#faad14' }} />
+                      批量异常预警
+                    </Space>
+                  }
+                  size="small"
+                  extra={
+                    <Switch
+                      checked={batchWarningEnabled}
+                      onChange={setBatchWarningEnabled}
+                      checkedChildren="启用"
+                      unCheckedChildren="关闭"
+                    />
+                  }
+                  style={{ marginBottom: 16 }}
+                >
+                  <div style={{ padding: '12px 0' }}>
+                    <div style={{ marginBottom: 24 }}>
+                      <div style={{ marginBottom: 8, fontWeight: 500 }}>
+                        <BellOutlined style={{ marginRight: 8 }} />
+                        预警阈值
+                      </div>
+                      <div style={{ paddingLeft: 24 }}>
+                        <Space>
+                          <span>连续</span>
+                          <InputNumber
+                            min={1}
+                            max={100}
+                            value={batchWarningThreshold}
+                            onChange={(value) => setBatchWarningThreshold(value || 5)}
+                            disabled={!batchWarningEnabled}
+                            style={{ width: 100 }}
+                          />
+                          <span>件同类缺陷触发预警</span>
+                        </Space>
+                        <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
+                          当连续检测到N件同一类型缺陷时，自动触发预警
+                        </div>
+                      </div>
+                    </div>
+
+                    <Divider style={{ margin: '16px 0' }} />
+
+                    <div style={{ marginBottom: 24 }}>
+                      <div style={{ marginBottom: 8, fontWeight: 500 }}>
+                        <BellOutlined style={{ marginRight: 8 }} />
+                        预警方式
+                      </div>
+                      <div style={{ paddingLeft: 24 }}>
+                        <Radio.Group
+                          value={batchWarningMethod}
+                          onChange={(e) => setBatchWarningMethod(e.target.value)}
+                          disabled={!batchWarningEnabled}
+                        >
+                          <Radio value="popup">页面弹窗</Radio>
+                          <Radio value="sound">声音提醒</Radio>
+                          <Radio value="both">弹窗+声音</Radio>
+                        </Radio.Group>
+                        <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
+                          当前预警方式：{getWarningMethodText(batchWarningMethod)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <Divider style={{ margin: '16px 0' }} />
+
+                    <div style={{ textAlign: 'right' }}>
+                      <Button
+                        type="primary"
+                        onClick={handleSaveBatchWarning}
+                        loading={savingWarning}
+                      >
+                        保存配置
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              </Col>
+
+              <Col span={12}>
+                <Card
+                  title={
+                    <Space>
+                      <BellOutlined style={{ color: '#1890ff' }} />
+                      预警说明
+                    </Space>
+                  }
+                  size="small"
+                >
+                  <List
+                    size="small"
+                    dataSource={[
+                      { title: '工作原理', content: '系统实时监控检测结果，当连续检测到指定数量的同类缺陷时，自动触发预警' },
+                      { title: '预警阈值', content: `当前设置为连续 ${batchWarningThreshold} 件同类缺陷触发预警` },
+                      { title: '预警方式', content: `当前使用 ${getWarningMethodText(batchWarningMethod)} 方式进行预警` },
+                      { title: '生效范围', content: '所有产线的实时检测均受此配置影响，保存后立即生效' },
+                      { title: '重置条件', content: '当检测到合格产品或不同类型缺陷时，连续计数会被重置' },
+                    ]}
+                    renderItem={(item) => (
+                      <List.Item>
+                        <List.Item.Meta
+                          title={item.title}
+                          description={item.content}
+                        />
+                      </List.Item>
+                    )}
+                  />
+                </Card>
+              </Col>
+            </Row>
+          </TabPane>
+
           <TabPane tab="系统配置" key="config">
             <Table
               loading={loading}

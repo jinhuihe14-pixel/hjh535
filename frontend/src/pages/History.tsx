@@ -14,6 +14,7 @@ import {
   Row,
   Col,
   List,
+  Statistic,
 } from 'antd'
 import {
   SearchOutlined,
@@ -22,10 +23,13 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   ToolOutlined,
+  RiseOutlined,
+  WarningOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { inspectionApi, productApi } from '../services/api'
-import type { InspectionRecord, Product, Defect } from '../types'
+import ReactECharts from 'echarts-for-react'
+import { inspectionApi, productApi, defectTypeApi, statisticsApi } from '../services/api'
+import type { InspectionRecord, Product, Defect, DefectType, StatisticsSummary } from '../types'
 import dayjs from 'dayjs'
 
 const { RangePicker } = DatePicker
@@ -33,14 +37,19 @@ const { Option } = Select
 
 const History: React.FC = () => {
   const [loading, setLoading] = useState(false)
+  const [statsLoading, setStatsLoading] = useState(false)
   const [records, setRecords] = useState<InspectionRecord[]>([])
   const [products, setProducts] = useState<Product[]>([])
+  const [defectTypes, setDefectTypes] = useState<DefectType[]>([])
+  const [statistics, setStatistics] = useState<StatisticsSummary | null>(null)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [searchSn, setSearchSn] = useState('')
   const [filterResult, setFilterResult] = useState<string | undefined>()
   const [filterProduct, setFilterProduct] = useState<string | undefined>()
+  const [filterDefectType, setFilterDefectType] = useState<string | undefined>()
+  const [filterSeverity, setFilterSeverity] = useState<number | undefined>()
   const [dateRange, setDateRange] = useState<any>(null)
   const [detailModal, setDetailModal] = useState(false)
   const [currentRecord, setCurrentRecord] = useState<InspectionRecord | null>(null)
@@ -53,10 +62,11 @@ const History: React.FC = () => {
         limit: pageSize,
       }
       if (searchSn) {
-        // Not supporting SN search directly from list, will handle separately
       }
       if (filterResult) params.result = filterResult
       if (filterProduct) params.product_code = filterProduct
+      if (filterDefectType) params.defect_type_code = filterDefectType
+      if (filterSeverity !== undefined) params.severity_level = filterSeverity
       if (dateRange && dateRange.length === 2) {
         params.start_time = dateRange[0].toISOString()
         params.end_time = dateRange[1].toISOString()
@@ -72,6 +82,29 @@ const History: React.FC = () => {
     }
   }
 
+  const loadStatistics = async () => {
+    setStatsLoading(true)
+    try {
+      const params: any = {
+        period: 'day',
+      }
+      if (filterProduct) params.product_code = filterProduct
+      if (filterDefectType) params.defect_type_code = filterDefectType
+      if (filterSeverity !== undefined) params.severity_level = filterSeverity
+      if (dateRange && dateRange.length === 2) {
+        params.start_time = dateRange[0].toISOString()
+        params.end_time = dateRange[1].toISOString()
+      }
+
+      const data = await statisticsApi.getSummary(params)
+      setStatistics(data)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setStatsLoading(false)
+    }
+  }
+
   const loadProducts = async () => {
     try {
       const data = await productApi.getList({ is_active: true })
@@ -81,26 +114,43 @@ const History: React.FC = () => {
     }
   }
 
+  const loadDefectTypes = async () => {
+    try {
+      const data = await defectTypeApi.getList({ is_active: true })
+      setDefectTypes(data)
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
   useEffect(() => {
     loadProducts()
+    loadDefectTypes()
   }, [])
 
   useEffect(() => {
     loadData()
-  }, [page, pageSize, filterResult, filterProduct, dateRange])
+    loadStatistics()
+  }, [page, pageSize, filterResult, filterProduct, filterDefectType, filterSeverity, dateRange])
 
   const handleSearch = () => {
     setPage(1)
     loadData()
+    loadStatistics()
   }
 
   const handleReset = () => {
     setSearchSn('')
     setFilterResult(undefined)
     setFilterProduct(undefined)
+    setFilterDefectType(undefined)
+    setFilterSeverity(undefined)
     setDateRange(null)
     setPage(1)
-    setTimeout(loadData, 0)
+    setTimeout(() => {
+      loadData()
+      loadStatistics()
+    }, 0)
   }
 
   const handleViewDetail = async (record: InspectionRecord) => {
@@ -132,6 +182,53 @@ const History: React.FC = () => {
     const texts: Record<number, string> = { 1: '轻微', 2: '一般', 3: '严重' }
     return texts[level] || '未知'
   }
+
+  const getDefectPieOption = () => {
+    if (!statistics || statistics.defect_distribution.length === 0) {
+      return {
+        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+        legend: { orient: 'vertical', left: 'left' },
+        series: [
+          {
+            name: '缺陷分布',
+            type: 'pie',
+            radius: ['40%', '70%'],
+            center: ['60%', '50%'],
+            avoidLabelOverlap: false,
+            itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+            label: { show: false, position: 'center' },
+            emphasis: {
+              label: { show: true, fontSize: 16, fontWeight: 'bold' },
+            },
+            labelLine: { show: false },
+            data: [{ value: 0, name: '暂无数据' }],
+          },
+        ],
+      }
+    }
+    return {
+      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+      legend: { orient: 'vertical', left: 'left', type: 'scroll' },
+      series: [
+        {
+          name: '缺陷分布',
+          type: 'pie',
+          radius: ['40%', '70%'],
+          center: ['65%', '50%'],
+          avoidLabelOverlap: false,
+          itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+          label: { show: false, position: 'center' },
+          emphasis: {
+            label: { show: true, fontSize: 16, fontWeight: 'bold' },
+          },
+          labelLine: { show: false },
+          data: statistics.defect_distribution.map((d) => ({ value: d.count, name: d.name })),
+        },
+      ],
+    }
+  }
+
+  const defectRate = statistics ? (100 - statistics.pass_rate).toFixed(2) : '0.00'
 
   const columns: ColumnsType<InspectionRecord> = [
     {
@@ -211,6 +308,54 @@ const History: React.FC = () => {
 
   return (
     <div>
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}>
+          <Card size="small" loading={statsLoading}>
+            <Statistic
+              title="今日检测总数"
+              value={statistics?.total_count || 0}
+              prefix={<RiseOutlined />}
+              valueStyle={{ color: '#1890ff' }}
+            />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small" loading={statsLoading}>
+            <Statistic
+              title="不良率"
+              value={defectRate}
+              suffix="%"
+              prefix={<WarningOutlined />}
+              valueStyle={{ color: '#ff4d4f' }}
+            />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small" loading={statsLoading}>
+            <Statistic
+              title="合格数"
+              value={statistics?.pass_count || 0}
+              prefix={<CheckCircleOutlined />}
+              valueStyle={{ color: '#52c41a' }}
+            />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small" loading={statsLoading}>
+            <Statistic
+              title="不良数"
+              value={(statistics?.rework_count || 0) + (statistics?.fail_count || 0)}
+              prefix={<CloseCircleOutlined />}
+              valueStyle={{ color: '#ff4d4f' }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Card title="缺陷类型分布" size="small" style={{ marginBottom: 16 }} loading={statsLoading}>
+        <ReactECharts option={getDefectPieOption()} style={{ height: 240 }} />
+      </Card>
+
       <Card size="small" style={{ marginBottom: 16 }}>
         <Space wrap>
           <Input
@@ -221,17 +366,6 @@ const History: React.FC = () => {
             style={{ width: 200 }}
             onPressEnter={handleSearch}
           />
-          <Select
-            placeholder="检测结果"
-            value={filterResult}
-            onChange={setFilterResult}
-            style={{ width: 120 }}
-            allowClear
-          >
-            <Option value="pass">合格</Option>
-            <Option value="rework">返工</Option>
-            <Option value="fail">报废</Option>
-          </Select>
           <Select
             placeholder="产品型号"
             value={filterProduct}
@@ -244,6 +378,41 @@ const History: React.FC = () => {
                 {p.product_name}
               </Option>
             ))}
+          </Select>
+          <Select
+            placeholder="缺陷类型"
+            value={filterDefectType}
+            onChange={setFilterDefectType}
+            style={{ width: 140 }}
+            allowClear
+          >
+            {defectTypes.map((d) => (
+              <Option key={d.code} value={d.code}>
+                {d.name}
+              </Option>
+            ))}
+          </Select>
+          <Select
+            placeholder="缺陷等级"
+            value={filterSeverity}
+            onChange={setFilterSeverity}
+            style={{ width: 120 }}
+            allowClear
+          >
+            <Option value={1}>轻微</Option>
+            <Option value={2}>一般</Option>
+            <Option value={3}>严重</Option>
+          </Select>
+          <Select
+            placeholder="检测结果"
+            value={filterResult}
+            onChange={setFilterResult}
+            style={{ width: 120 }}
+            allowClear
+          >
+            <Option value="pass">合格</Option>
+            <Option value="rework">返工</Option>
+            <Option value="fail">报废</Option>
           </Select>
           <RangePicker value={dateRange} onChange={setDateRange} />
           <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>
