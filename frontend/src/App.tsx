@@ -9,6 +9,9 @@ import {
   SettingOutlined,
   BellOutlined,
   SafetyOutlined,
+  BarChartOutlined,
+  ExperimentOutlined,
+  AlertOutlined,
 } from '@ant-design/icons'
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
@@ -17,6 +20,9 @@ import History from './pages/History'
 import ProductManagement from './pages/ProductManagement'
 import DefectTypeManagement from './pages/DefectTypeManagement'
 import SystemSettings from './pages/SystemSettings'
+import ReportAnalysis from './pages/ReportAnalysis'
+import ModelTuning from './pages/ModelTuning'
+import BatchAlert from './pages/BatchAlert'
 import { alertApi } from './services/api'
 import type { Alert } from './types'
 
@@ -25,9 +31,33 @@ const { Header, Sider, Content } = Layout
 const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: '数据概览' },
   { key: '/realtime', icon: <VideoCameraOutlined />, label: '实时检测' },
-  { key: '/history', icon: <HistoryOutlined />, label: '检测记录' },
+  {
+    key: 'analysis',
+    icon: <BarChartOutlined />,
+    label: '数据分析',
+    children: [
+      { key: '/reports', icon: <BarChartOutlined />, label: '报表分析' },
+      { key: '/history', icon: <HistoryOutlined />, label: '检测记录' },
+    ],
+  },
+  {
+    key: 'model',
+    icon: <ExperimentOutlined />,
+    label: '模型运维',
+    children: [
+      { key: '/model-tuning', icon: <ExperimentOutlined />, label: '模型调优' },
+      { key: '/defect-types', icon: <BugOutlined />, label: '缺陷类型' },
+    ],
+  },
+  {
+    key: 'alert',
+    icon: <AlertOutlined />,
+    label: '预警中心',
+    children: [
+      { key: '/batch-alert', icon: <AlertOutlined />, label: '批量异常预警' },
+    ],
+  },
   { key: '/products', icon: <ShoppingOutlined />, label: '产品管理' },
-  { key: '/defect-types', icon: <BugOutlined />, label: '缺陷类型' },
   { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
 ]
 
@@ -86,7 +116,10 @@ const AppContent: React.FC = () => {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/realtime" element={<RealTimeDetection />} />
+            <Route path="/reports" element={<ReportAnalysis />} />
             <Route path="/history" element={<History />} />
+            <Route path="/model-tuning" element={<ModelTuning />} />
+            <Route path="/batch-alert" element={<BatchAlert />} />
             <Route path="/products" element={<ProductManagement />} />
             <Route path="/defect-types" element={<DefectTypeManagement />} />
             <Route path="/settings" element={<SystemSettings />} />
